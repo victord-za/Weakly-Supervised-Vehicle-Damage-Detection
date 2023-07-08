@@ -1,0 +1,7 @@
+# Dataset
+train: /content/drive/MyDrive/MIT807/data/train  # path to the training set file listing all image paths
+val: /content/drive/MyDrive/MIT807/data/val  # path to the validation set file listing all image paths
+test: /content/drive/MyDrive/MIT807/data/test # path to the test set file listing all image paths
+
+nc: 2  # number of classes
+names: ['scratch', 'dent']  # class names

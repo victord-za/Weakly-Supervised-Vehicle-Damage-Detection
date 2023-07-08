@@ -1,0 +1,20 @@
+# Dataset
+nc: 2  # number of classes
+names: ['scratch', 'dent']  # class names
+train: ../data/train2017.txt  # path to the training set file listing all image paths
+val: ../data/val2017.txt  # path to the validation set file listing all image paths
+test: ../data/test2017.txt # path to the test set file listing all image paths
+
+# Model configuration
+model:
+  type: YOLOv5s  # YOLOv5 model type (s, m, l, x)
+  depth_multiple: 0.33  # model depth multiple
+  width_multiple: 0.50  # layer channel multiple
+
+# Training
+epochs: 300  # number of epochs to train
+batch_size: 16  # batch size
+optimizer: 'Adam'  # optimizer
+lr: 0.001  # learning rate
+lr_decay: 'Cosine'  # learning rate decay strategy
+weight_decay: 0.0005  # weight decay
