@@ -29,7 +29,7 @@ class MakeDataset:
         self.clean_data(unavailable_images)
         self.one_hot_encode_damage()
         self.save_interim_data()
-        #self.split_dataset()
+        self.split_dataset()
 
     def get_csv(self, csv_filename):
         if isinstance(csv_filename, str):
@@ -164,17 +164,6 @@ class MakeDataset:
         
 
     def save_interim_data(self):
-        #output_folderpath = Path(self.data_folder) / 'interim'
-        #output_filepath = os.path.join(output_folderpath, 'interim.csv')
-        #self.df.to_csv(output_filepath, index=False)
-        #header_row = self.df.columns.tolist()
-        # Find the ID index as the column named "global_key"
-        #id_index = header_row.index("global_key")
-        #for i, row in self.df.iterrows():
-        #    image_id = row[id_index]
-        #    image_path = Path(self.image_folder) / f"{image_id}.jpg"
-        #    if image_path.exists():
-        #        shutil.move(image_path, output_folderpath)
         output_folderpath = Path(self.data_folder) / 'interim'
         output_filepath = os.path.join(output_folderpath, 'interim.csv')
         if any(self.image_locations[:, 0]):
@@ -189,7 +178,54 @@ class MakeDataset:
             self.df.apply(move_image, axis=1)
         else:
             self.df = pd.read_csv(output_filepath, delimiter=',')
+         
+    def split_dataset(self):
+        if any(self.image_locations[:, 1]):
+            # Create a numeric code from boolean columns by treating them as binary digits
+            self.df['stratify_col'] = 0
+            damage_cols = [col for col in self.df.columns if col.startswith('DAMAGE_')]
+            for i, col in enumerate(damage_cols):
+                self.df['stratify_col'] += self.df[col].astype(int) * (2**i)
                 
+            # Split dataset into train, val, and test sets
+            self.train, val_test = train_test_split(self.df, test_size=0.2, random_state=42, stratify=self.df['stratify_col'])
+            self.val, self.test = train_test_split(val_test, test_size=0.5, random_state=42, stratify=self.df['stratify_col'])
+            
+            # Reset indexes
+            self.train = self.train.reset_index(drop=True)
+            self.val = self.val.reset_index(drop=True)
+            self.test = self.test.reset_index(drop=True)
+            
+            # Save dataframes to csv files
+            self.train.to_csv(os.path.join(self.data_folder, 'processed', 'train.csv'), index=False)
+            self.val.to_csv(os.path.join(self.data_folder, 'processed', 'val.csv'), index=False)
+            self.test.to_csv(os.path.join(self.data_folder, 'processed', 'test.csv'), index=False)
+            
+            # Move images to respective folders
+            for i, row in self.train.iterrows():
+                source = os.path.join(self.data_folder, 'interim', f"{row['global_key']}.jpg")
+                destination = os.path.join(self.data_folder, 'processed', 'train')
+                if os.path.exists(source):
+                    shutil.move(source, destination)
+                    
+            for i, row in self.val.iterrows():
+                source = os.path.join(self.data_folder, 'interim', f"{row['global_key']}.jpg")
+                destination = os.path.join(self.data_folder, 'processed', 'val')
+                if os.path.exists(source):
+                    shutil.move(source, destination)
+                    
+            for i, row in self.test.iterrows():
+                source = os.path.join(self.data_folder, 'interim', f"{row['global_key']}.jpg")
+                destination = os.path.join(self.data_folder, 'processed', 'test')
+                if os.path.exists(source):
+                    shutil.move(source, destination)
+
+        else:
+            self.train = pd.read_csv(os.path.join(self.data_folder, 'processed', 'train.csv'), delimiter=',')
+            self.val = pd.read_csv(os.path.join(self.data_folder, 'processed', 'val.csv'), delimiter=',')
+            self.test = pd.read_csv(os.path.join(self.data_folder, 'processed', 'test.csv'), delimiter=',')
+
+        
 
 if __name__ == '__main__':
     dataset = MakeDataset()
