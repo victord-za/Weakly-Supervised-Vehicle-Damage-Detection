@@ -79,12 +79,14 @@ optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 # Training the model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-model = model.to(device)
+with open(os.path.join(HOME_FOLDER, 'device_info.txt'), 'w') as f:
+    f.write(f"Using device: {device}")
 
+model = model.to(device)
 min_val_loss = np.inf
 
-num_epochs = 0
-batch_size = 8
+num_epochs = 50
+batch_size = 16
 
 
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
