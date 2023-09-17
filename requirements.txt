@@ -1,14 +1,13 @@
 torch
 torchvision
 pandas
-PIL
+Pillow
 numpy
-dotenv 
+python-dotenv 
 pathlib
 matplotlib
 logging
 requests
-os
-shutil
 sklearn
 seaborn
+wandb

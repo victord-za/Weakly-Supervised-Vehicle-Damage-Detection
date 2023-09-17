@@ -13,11 +13,18 @@ from dotenv import find_dotenv, load_dotenv
 from pathlib import Path
 from torchvision.models import resnet50, ResNet50_Weights
 import matplotlib.pyplot as plt
+import wandb
 
 # Load environment variables from .env file
 load_dotenv(find_dotenv())
 DATA_FOLDER = os.getenv('DATA_FOLDER')
 HOME_FOLDER = os.getenv('HOME_FOLDER')
+
+# Set up weights and biases for logging
+os.environ['WANDB_API_KEY'] = os.getenv('WANDB_API_KEY')
+os.environ['WANDB_ENTITY'] = os.getenv('WANDB_ENTITY')
+os.environ['WANDB_PROJECT'] = os.getenv('WANDB_PROJECT')
+wandb.init(project=os.environ['WANDB_PROJECT'], entity=os.environ['WANDB_ENTITY'], resume="allow")
 
 # Define the transforms for data augmentation
 transform = transforms.Compose([
@@ -43,6 +50,18 @@ class VehicleDamageDataset(Dataset):
         self.annotations = pd.read_csv(csv_file)
         self.root_dir = root_dir
         self.transform = transform
+        
+        original_length = len(self.annotations)
+
+        # Filtering the dataframe to include only rows where the image files exist
+        valid_indices = self.annotations['global_key'].apply(lambda x: os.path.isfile(os.path.join(self.root_dir, f"{x}.jpg")))
+        self.annotations = self.annotations[valid_indices].reset_index(drop=True)
+
+        new_length = len(self.annotations)
+        files_dropped = original_length - new_length
+        drop_percentage = (files_dropped / original_length) * 100
+        print(f"Number of files dropped: {files_dropped} ({drop_percentage:.2f}%)")
+
 
     def __len__(self):
         return len(self.annotations)
@@ -86,7 +105,7 @@ model = model.to(device)
 min_val_loss = np.inf
 
 num_epochs = 50
-batch_size = 16
+batch_size = 32
 
 
 train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
@@ -94,11 +113,12 @@ val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
 
 # Check for existing checkpoint
-checkpoint_path = os.path.join(HOME_FOLDER, 'models', 'checkpoint.pt')
+best_checkpoint_path = os.path.join(HOME_FOLDER, 'models', 'best_checkpoint.pt')
+latest_checkpoint_path = os.path.join(HOME_FOLDER, 'models', 'latest_checkpoint.pt')
 
-if os.path.exists(checkpoint_path):
+if os.path.exists(latest_checkpoint_path):
     # Load checkpoint
-    checkpoint = torch.load(checkpoint_path)
+    checkpoint = torch.load(latest_checkpoint_path)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     start_epoch = checkpoint['epoch']
@@ -150,6 +170,11 @@ for epoch in range(start_epoch, num_epochs):
     train_losses.append(train_loss)
     train_accuracies.append(train_accuracy)
     print(f"Train - Epoch {epoch+1}/{num_epochs} - Loss: {train_loss:.4f} - Accuracy: {train_accuracy:.4f}")
+    wandb.log({
+        "Train Loss": train_loss,
+        "Train Accuracy": train_accuracy,
+        "Epoch": epoch
+    })
 
     # Validation loop
     model.eval()
@@ -175,6 +200,11 @@ for epoch in range(start_epoch, num_epochs):
     val_losses.append(val_loss)
     val_accuracies.append(val_accuracy)
     print(f"Val - Epoch {epoch+1}/{num_epochs} - Loss: {val_loss:.4f} - Accuracy: {val_accuracy:.4f}")
+    wandb.log({
+        "Validation Loss": val_loss,
+        "Validation Accuracy": val_accuracy,
+        "Epoch": epoch
+    })
 
     # Check for early stopping
     if val_loss < best_val_loss:
@@ -192,13 +222,27 @@ for epoch in range(start_epoch, num_epochs):
             'train_accuracies': train_accuracies,
             'val_accuracies': val_accuracies,
             'best_val_loss': best_val_loss
-        }, checkpoint_path)
+        }, best_checkpoint_path)
+        
+        wandb.save(f'checkpoint_epoch_{epoch}.pth')
 
     else:
         early_stopping_counter += 1
         if early_stopping_counter >= patience:
             print(f"Early stopping at epoch {epoch+1}")
             break
+        
+    # Save a checkpoint
+    torch.save({
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'train_losses': train_losses,
+        'val_losses': val_losses,
+        'train_accuracies': train_accuracies,
+        'val_accuracies': val_accuracies,
+        'best_val_loss': best_val_loss
+    }, latest_checkpoint_path)
 
 # Load the best model state
 #model.load_state_dict(best_model_state)
@@ -232,21 +276,27 @@ test_total_predictions = 0
 test_batch_size = 2
 test_dataloader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
 
-#with torch.no_grad():
-#    for images, labels in test_dataloader:
-#        images = images.to(device)
-#        labels = labels.to(device)
-#        outputs = model(images)
-#        loss = criterion(outputs, labels)
-#        test_running_loss += loss.item()
-#        predicted = torch.sigmoid(outputs) > 0.5
-#        test_correct_predictions += (predicted == labels).float().sum().item()
-#        test_total_predictions += labels.numel()
+with torch.no_grad():
+    for images, labels in test_dataloader:
+        images = images.to(device)
+        labels = labels.to(device)
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        test_running_loss += loss.item()
+        predicted = torch.sigmoid(outputs) > 0.5
+        test_correct_predictions += (predicted == labels).float().sum().item()
+        test_total_predictions += labels.numel()
 
 # Calculate test set loss and accuracy
-#test_epoch_loss = test_running_loss / len(test_dataloader)
-#test_epoch_accuracy = test_correct_predictions / test_total_predictions
-#print(f"Test Evaluation - Loss: {test_epoch_loss:.4f} - Accuracy: {test_epoch_accuracy:.4f}")
+test_epoch_loss = test_running_loss / len(test_dataloader)
+test_epoch_accuracy = test_correct_predictions / test_total_predictions
+print(f"Test Evaluation - Loss: {test_epoch_loss:.4f} - Accuracy: {test_epoch_accuracy:.4f}")
+
+wandb.log({
+    "Test Loss": test_epoch_loss,
+    "Test Accuracy": test_epoch_accuracy
+})
+wandb.finish()
 
 # Saliency map generation
 model.eval()
