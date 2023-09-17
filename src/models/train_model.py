@@ -14,11 +14,19 @@ from pathlib import Path
 from torchvision.models import resnet50, ResNet50_Weights
 import matplotlib.pyplot as plt
 import wandb
+import sys
+import time
+
+start_time = time.time()
+timeout_flag = False
+TIMEOUT_THRESHOLD = 3 * 60 * 60 # 3 hours in seconds
 
 # Load environment variables from .env file
 load_dotenv(find_dotenv())
 DATA_FOLDER = os.getenv('DATA_FOLDER')
 HOME_FOLDER = os.getenv('HOME_FOLDER')
+
+sys.stdout = open(os.path.join(os.getenv('HOME_FOLDER'), 'reports', 'training_log.txt'), 'w')
 
 # Set up weights and biases for logging
 os.environ['WANDB_API_KEY'] = os.getenv('WANDB_API_KEY')
@@ -142,6 +150,12 @@ patience = 10
 early_stopping_counter = 0
 
 for epoch in range(start_epoch, num_epochs):
+    if time.time() - start_time > TIMEOUT_THRESHOLD:
+        print(f"Timeout threshold of {TIMEOUT_THRESHOLD} seconds reached. Stopping training.")
+        wandb.finish()
+        sys.stdout.close()
+        timeout_flag = True
+        break
     # Training loop
     model.train()
     running_loss = 0.0
@@ -223,9 +237,6 @@ for epoch in range(start_epoch, num_epochs):
             'val_accuracies': val_accuracies,
             'best_val_loss': best_val_loss
         }, best_checkpoint_path)
-        
-        wandb.save(f'checkpoint_epoch_{epoch}.pth')
-
     else:
         early_stopping_counter += 1
         if early_stopping_counter >= patience:
@@ -269,70 +280,72 @@ plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', 'accuracy
 
 
 # Test set evaluation
-model.eval()
-test_running_loss = 0.0
-test_correct_predictions = 0
-test_total_predictions = 0
-test_batch_size = 2
-test_dataloader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
+if not(timeout_flag):
+    model.eval()
+    test_running_loss = 0.0
+    test_correct_predictions = 0
+    test_total_predictions = 0
+    test_batch_size = 2
+    test_dataloader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
 
-with torch.no_grad():
-    for images, labels in test_dataloader:
+    with torch.no_grad():
+        for images, labels in test_dataloader:
+            images = images.to(device)
+            labels = labels.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            test_running_loss += loss.item()
+            predicted = torch.sigmoid(outputs) > 0.5
+            test_correct_predictions += (predicted == labels).float().sum().item()
+            test_total_predictions += labels.numel()
+
+    # Calculate test set loss and accuracy
+    test_epoch_loss = test_running_loss / len(test_dataloader)
+    test_epoch_accuracy = test_correct_predictions / test_total_predictions
+    print(f"Test Evaluation - Loss: {test_epoch_loss:.4f} - Accuracy: {test_epoch_accuracy:.4f}")
+
+    wandb.log({
+        "Test Loss": test_epoch_loss,
+        "Test Accuracy": test_epoch_accuracy
+    })
+    wandb.finish()
+    sys.stdout.close()
+
+    # Saliency map generation
+    model.eval()
+    class_names = train_dataset.annotations.columns[1:]  # Assuming the class names are the column names, excluding 'global_key'
+
+    for i, (images, labels) in enumerate(test_dataloader):
         images = images.to(device)
-        labels = labels.to(device)
+        images.requires_grad = True
+
         outputs = model(images)
-        loss = criterion(outputs, labels)
-        test_running_loss += loss.item()
-        predicted = torch.sigmoid(outputs) > 0.5
-        test_correct_predictions += (predicted == labels).float().sum().item()
-        test_total_predictions += labels.numel()
+        outputs = torch.sigmoid(outputs)
 
-# Calculate test set loss and accuracy
-test_epoch_loss = test_running_loss / len(test_dataloader)
-test_epoch_accuracy = test_correct_predictions / test_total_predictions
-print(f"Test Evaluation - Loss: {test_epoch_loss:.4f} - Accuracy: {test_epoch_accuracy:.4f}")
+        for j in range(len(class_names)):
+            model.zero_grad()
+            outputs[:, j].backward(torch.ones_like(outputs[:, j]), retain_graph=True)
 
-wandb.log({
-    "Test Loss": test_epoch_loss,
-    "Test Accuracy": test_epoch_accuracy
-})
-wandb.finish()
+            saliency, _ = torch.max(images.grad.data.abs(), dim=1)
+            saliency = saliency.cpu().numpy()
+            # Save saliency maps
+            for k in range(images.size(0)):
+                # Get the original image
+                original_image = images[k].permute(1, 2, 0).detach().cpu().numpy()
+                # Reverse normalization
+                original_image = original_image * np.array([0.229, 0.224, 0.225]) + np.array([0.485, 0.456, 0.406])
+                # Clip to be in range [0,1] (optional)
+                original_image = np.clip(original_image, 0, 1)
+                original_image_name = test_dataset.annotations.loc[i * batch_size + k, "global_key"]
+                os.makedirs(f"{HOME_FOLDER}/reports/figures/saliency/test/{original_image_name}", exist_ok=True)
 
-# Saliency map generation
-model.eval()
-class_names = train_dataset.annotations.columns[1:]  # Assuming the class names are the column names, excluding 'global_key'
+                # Get the saliency map for the current class and multiply by the class prediction
+                class_saliency = saliency[k] * outputs[k, j].item()
+                # Create a new figure, plot the original image, and add the saliency map overlay
+                plt.figure()
+                plt.imshow(original_image)
+                plt.imshow(class_saliency, cmap='bwr', alpha=0.5)  # overlay saliency map
+                plt.axis('off')
 
-for i, (images, labels) in enumerate(test_dataloader):
-    images = images.to(device)
-    images.requires_grad = True
-
-    outputs = model(images)
-    outputs = torch.sigmoid(outputs)
-
-    for j in range(len(class_names)):
-        model.zero_grad()
-        outputs[:, j].backward(torch.ones_like(outputs[:, j]), retain_graph=True)
-
-        saliency, _ = torch.max(images.grad.data.abs(), dim=1)
-        saliency = saliency.cpu().numpy()
-        # Save saliency maps
-        for k in range(images.size(0)):
-            # Get the original image
-            original_image = images[k].permute(1, 2, 0).detach().cpu().numpy()
-            # Reverse normalization
-            original_image = original_image * np.array([0.229, 0.224, 0.225]) + np.array([0.485, 0.456, 0.406])
-            # Clip to be in range [0,1] (optional)
-            original_image = np.clip(original_image, 0, 1)
-            original_image_name = test_dataset.annotations.loc[i * batch_size + k, "global_key"]
-            os.makedirs(f"{HOME_FOLDER}/reports/figures/saliency/test/{original_image_name}", exist_ok=True)
-
-            # Get the saliency map for the current class and multiply by the class prediction
-            class_saliency = saliency[k] * outputs[k, j].item()
-            # Create a new figure, plot the original image, and add the saliency map overlay
-            plt.figure()
-            plt.imshow(original_image)
-            plt.imshow(class_saliency, cmap='bwr', alpha=0.5)  # overlay saliency map
-            plt.axis('off')
-
-            plt.savefig(f"{HOME_FOLDER}/reports/figures/saliency/test/{original_image_name}/{class_names[j]}.jpg")
-            plt.close()  # Closes the figure, so it doesn't get displayed in your Python environment
+                plt.savefig(f"{HOME_FOLDER}/reports/figures/saliency/test/{original_image_name}/{class_names[j]}.jpg")
+                plt.close()  # Closes the figure, so it doesn't get displayed in your Python environment
