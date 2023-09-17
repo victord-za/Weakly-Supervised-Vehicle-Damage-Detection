@@ -19,7 +19,7 @@ import time
 
 start_time = time.time()
 timeout_flag = False
-TIMEOUT_THRESHOLD = 3 * 60 * 60 # 3 hours in seconds
+TIMEOUT_THRESHOLD = 9.25 * 60 * 60 # 9.25 hours in seconds
 
 # Load environment variables from .env file
 load_dotenv(find_dotenv())
