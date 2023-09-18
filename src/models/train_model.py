@@ -17,7 +17,7 @@ import wandb
 import sys
 import time
 from sklearn.metrics import f1_score, confusion_matrix
-import seaborsn as sns
+import seaborn as sns
 import matplotlib.pyplot as plt
 
 start_time = time.time()

@@ -8,6 +8,6 @@ pathlib
 matplotlib
 logging
 requests
-sklearn
+scikit-learn
 seaborn
 wandb
