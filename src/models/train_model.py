@@ -16,10 +16,14 @@ import matplotlib.pyplot as plt
 import wandb
 import sys
 import time
+from sklearn.metrics import f1_score, confusion_matrix
+import seaborsn as sns
+import matplotlib.pyplot as plt
 
 start_time = time.time()
 timeout_flag = False
 TIMEOUT_THRESHOLD = 9.25 * 60 * 60 # 9.25 hours in seconds
+PREDICTION_THRESHOLD = 0.5
 
 # Load environment variables from .env file
 load_dotenv(find_dotenv())
@@ -285,8 +289,11 @@ if not(timeout_flag):
     test_running_loss = 0.0
     test_correct_predictions = 0
     test_total_predictions = 0
-    test_batch_size = 2
+    test_batch_size = 8
     test_dataloader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
+
+    test_labels = []
+    test_predictions = []
 
     with torch.no_grad():
         for images, labels in test_dataloader:
@@ -298,6 +305,23 @@ if not(timeout_flag):
             predicted = torch.sigmoid(outputs) > 0.5
             test_correct_predictions += (predicted == labels).float().sum().item()
             test_total_predictions += labels.numel()
+            
+            predicted = torch.sigmoid(outputs) > PREDICTION_THRESHOLD
+            
+            test_labels.append(labels.cpu().numpy())
+            test_predictions.append(predicted.cpu().numpy())
+
+            test_correct_predictions += (predicted == labels).float().sum().item()
+            test_total_predictions += labels.numel()
+
+    # Flattening the lists of labels and predictions
+    test_labels_flat = [item for sublist in test_labels for item in sublist]
+    test_predictions_flat = [item for sublist in test_predictions for item in sublist]
+
+    # Calculate F1 score
+    f1_macro = f1_score(test_labels_flat, test_predictions_flat, average='macro')
+    f1_weighted = f1_score(test_labels_flat, test_predictions_flat, average='weighted')
+
 
     # Calculate test set loss and accuracy
     test_epoch_loss = test_running_loss / len(test_dataloader)
@@ -307,9 +331,21 @@ if not(timeout_flag):
     wandb.log({
         "Test Loss": test_epoch_loss,
         "Test Accuracy": test_epoch_accuracy
+        "Test Macro F1": f1_macro,
+        "Test Weighted F1": f1_weighted
     })
     wandb.finish()
     sys.stdout.close()
+    
+    conf_matrix = confusion_matrix(test_labels_flat, test_predictions_flat)
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(conf_matrix, annot=True, fmt="d", cmap='Blues')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.title('Confusion Matrix: Test Set')
+    plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', 'test_confusion_matrix.png'))
+
+
 
     # Saliency map generation
     model.eval()
