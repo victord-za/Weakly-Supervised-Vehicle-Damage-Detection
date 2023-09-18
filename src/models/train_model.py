@@ -330,7 +330,7 @@ if not(timeout_flag):
 
     wandb.log({
         "Test Loss": test_epoch_loss,
-        "Test Accuracy": test_epoch_accuracy
+        "Test Accuracy": test_epoch_accuracy,
         "Test Macro F1": f1_macro,
         "Test Weighted F1": f1_weighted
     })
