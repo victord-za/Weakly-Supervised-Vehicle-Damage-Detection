@@ -37,15 +37,21 @@ def train():
     else:
         print("Starting training from scratch.")
         model = YOLO(YOLO_CONFIG)  # Start from pre-trained weights
-
+    
+    model.to('cuda')
     # Configure training parameters
     epochs = 20
-    imgsz = 224
+    imgsz = [224, 224]
     batch_size = 64
     data_config = Path(HOME_FOLDER) / 'models' / 'yolo_seg' / 'cardd.yaml'
 
     # Train the model
-    results = model.train(data=data_config, epochs=epochs, imgsz=imgsz, weights=CHECKPOINT_DIR, resume=True, batch_size=batch_size)
+    results = model.train(
+                data=data_config, 
+                epochs=epochs, 
+                imgsz=imgsz, 
+                resume=True if os.path.exists(LAST_CHECKPOINT_PATH) else False, 
+                batch=batch_size)
 
     # Finish W&B run
     run.finish()
