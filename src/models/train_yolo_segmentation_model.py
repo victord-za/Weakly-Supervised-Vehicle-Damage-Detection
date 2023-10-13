@@ -1,10 +1,16 @@
 import os
 from pathlib import Path
+from dotenv import find_dotenv, load_dotenv
 import wandb
 from ultralytics import YOLO
 
 def train():
     
+    # Write command line outputs to training log file
+    sys.stdout = open(os.path.join(os.getenv('HOME_FOLDER'), 'reports', 'yolo_seg_training_log.txt'), 'w')
+    # Load environment variables from .env file
+    load_dotenv(find_dotenv())
+
     DATA_FOLDER = os.getenv('DATA_FOLDER')
     HOME_FOLDER = os.getenv('HOME_FOLDER')
 
