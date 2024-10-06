@@ -1,20 +1,3 @@
-import os
-import sys
-from pathlib import Path
-from dotenv import find_dotenv, load_dotenv
-import time
-import math
-import random
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
-import matplotlib.pyplot as plt
-from scipy.ndimage import gaussian_filter
-from sklearn.metrics import f1_score, confusion_matrix
-from PIL import Image
-import wandb
-from collections import defaultdict
 import torch
 import torchvision.models as models
 import torch.nn as nn
@@ -22,26 +5,38 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import torchvision.transforms as transforms
 from torch.utils.data import Dataset
+import pandas as pd
+from PIL import Image
+import os
+import numpy as np
+from dotenv import find_dotenv, load_dotenv
+from pathlib import Path
 from torchvision.models import resnet50, ResNet50_Weights
-from torch.utils.data import Sampler
+import matplotlib.pyplot as plt
+import wandb
+import sys
+import time
+from sklearn.metrics import f1_score, confusion_matrix
+import seaborn as sns
+from pytorch_grad_cam import GradCAM
+from pytorch_grad_cam.utils.image import show_cam_on_image
 
 start_time = time.time()
 timeout_flag = False
-TIMEOUT_THRESHOLD = 9.25 * 60 * 60 # 9.25 hours in seconds
+TIMEOUT_THRESHOLD = 9.25 * 60 * 60  # 9.25 hours in seconds
 PREDICTION_THRESHOLD = 0.5
 
 # Load environment variables from .env file
 load_dotenv(find_dotenv())
 DATA_FOLDER = os.getenv('DATA_FOLDER')
 HOME_FOLDER = os.getenv('HOME_FOLDER')
-
-#sys.stdout = open(os.path.join(os.getenv('HOME_FOLDER'), 'reports', 'training_log.txt'), 'w')
+sys.stdout = open(os.path.join(os.getenv('HOME_FOLDER'), 'reports', 'training_log.txt'), 'w')
 
 # Set up weights and biases for logging
-#os.environ['WANDB_API_KEY'] = os.getenv('WANDB_API_KEY')
-#os.environ['WANDB_ENTITY'] = os.getenv('WANDB_ENTITY')
-#os.environ['WANDB_PROJECT'] = os.getenv('WANDB_PROJECT')
-#wandb.init(project=os.environ['WANDB_PROJECT'], entity=os.environ['WANDB_ENTITY'], resume="allow")
+os.environ['WANDB_API_KEY'] = os.getenv('WANDB_API_KEY')
+os.environ['WANDB_ENTITY'] = os.getenv('WANDB_ENTITY')
+os.environ['WANDB_PROJECT'] = os.getenv('WANDB_PROJECT')
+wandb.init(project=os.environ['WANDB_PROJECT'], entity=os.environ['WANDB_ENTITY'], resume="allow")
 
 # Define the transforms for data augmentation
 transform = transforms.Compose([
@@ -53,11 +48,11 @@ transform = transforms.Compose([
     transforms.RandomRotation(15),
     transforms.RandomAffine(0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
     transforms.ToTensor(),
-    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])  # values for pretrained torchvision models
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
 
 val_transform = transforms.Compose([
-    transforms.Resize((224, 224)),  
+    transforms.Resize((224, 224)),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
@@ -67,18 +62,13 @@ class VehicleDamageDataset(Dataset):
         self.annotations = pd.read_csv(csv_file)
         self.root_dir = root_dir
         self.transform = transform
-        
         original_length = len(self.annotations)
-
-        # Filtering the dataframe to include only rows where the image files exist
         valid_indices = self.annotations['global_key'].apply(lambda x: os.path.isfile(os.path.join(self.root_dir, f"{x}.jpg")))
         self.annotations = self.annotations[valid_indices].reset_index(drop=True)
-
         new_length = len(self.annotations)
         files_dropped = original_length - new_length
         drop_percentage = (files_dropped / original_length) * 100
         print(f"Number of files dropped: {files_dropped} ({drop_percentage:.2f}%)")
-
 
     def __len__(self):
         return len(self.annotations)
@@ -89,113 +79,39 @@ class VehicleDamageDataset(Dataset):
         image = Image.open(img_path).convert("RGB")
         if self.transform:
             image = self.transform(image)
-
         label = torch.tensor(self.annotations.iloc[index, 1:].values.astype(np.float32))
         return image, label
-    
-class BalancedBatchSampler(Sampler):
-    def __init__(self, dataset, batch_size):
-        self.dataset = dataset
-        self.batch_size = batch_size
-        self.num_classes = self._extract_num_classes()
-        self.samples_per_cls = math.floor(self.batch_size / self.num_classes)
-        self.class_indices = self._get_class_indices()
-        self.class_counts = {k: len(v) for k, v in self.class_indices.items()}
-        self.used_indices = defaultdict(list)
-
-    def _extract_num_classes(self):
-        # Assumes that the DataFrame has one column for each class label
-        return len(self.dataset.annotations.columns) - 1
-
-    def _get_class_indices(self):
-        # Maps each class to the indices of the samples that belong to it
-        class_indices = defaultdict(list)
-        for idx, row in self.dataset.annotations.iterrows():
-            labels = row[1:].values  # Assuming the first column is an ID or filename
-            for class_idx, label in enumerate(labels):
-                if label == 1:
-                    class_indices[class_idx].append(idx)
-        return class_indices
-
-    def __iter__(self):
-        while True:
-            batch = []
-            for class_idx in range(self.num_classes):
-                # Get fresh samples or use from the already used ones
-                if len(self.class_indices[class_idx]) >= self.samples_per_cls:
-                    choices = random.sample(self.class_indices[class_idx], self.samples_per_cls)
-                else:
-                    choices = random.choices(self.used_indices[class_idx], k=self.samples_per_cls)
-                batch.extend(choices)
-
-                # Update used indices for the class
-                self.used_indices[class_idx].extend(choices)
-                # Remove the used indices from the fresh pool
-                self.class_indices[class_idx] = [idx for idx in self.class_indices[class_idx] if idx not in choices]
-
-                # If we used up the class, replenish it from used samples (for the next iteration/batch)
-                if len(self.class_indices[class_idx]) < self.samples_per_cls:
-                    self.class_indices[class_idx].extend(self.used_indices[class_idx])
-                    self.used_indices[class_idx] = []
-
-            # Shuffle the batch to mix class order
-            random.shuffle(batch)
-            yield batch[:self.batch_size]
-
-            # Check if we have iterated over all samples
-            if all(len(indices) == 0 for indices in self.class_indices.values()):
-                break
-
-    def __len__(self):
-        # Compute the total number of unique samples we can iterate over
-        total_samples = sum(self.class_counts.values())
-        # We can't iterate more than once over all unique samples
-        return min(total_samples // self.batch_size, len(self.dataset) // self.batch_size)
-
 
 # Define the datasets
-# Define the training set
-train_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'processed' / 'train.csv', root_dir=Path(DATA_FOLDER) / 'processed' / 'train', transform=transform)
-# Define the validation set
-val_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'processed' / 'val.csv', root_dir=Path(DATA_FOLDER) / 'processed' / 'val', transform=val_transform)
-# Define the test set
-test_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'processed' / 'test.csv', root_dir=Path(DATA_FOLDER) / 'processed' / 'test', transform=val_transform)
+train_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'train.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'train', transform=transform)
+val_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'val.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'val', transform=val_transform)
+test_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'test.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'test', transform=val_transform)
 
 # Define the model
-#model = models.resnet50(pretrained=True)
 model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
 num_classes = len(train_dataset.annotations.columns) - 1
 num_features = model.fc.in_features
 model.fc = nn.Linear(num_features, num_classes)
-criterion = nn.BCEWithLogitsLoss()
-#criterion = nn.CrossEntropyLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
 
+criterion = nn.BCEWithLogitsLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 
 # Training the model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-with open(os.path.join(HOME_FOLDER, 'device_info.txt'), 'w') as f:
-    f.write(f"Using device: {device}")
-
 model = model.to(device)
+
 min_val_loss = np.inf
-
-num_epochs = 50
+num_epochs = 20
 batch_size = 32
-
-
-balanced_batch_sampler = BalancedBatchSampler(train_dataset, batch_size)
-train_dataloader = DataLoader(train_dataset, batch_sampler=balanced_batch_sampler)
+train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
-
 
 # Check for existing checkpoint
 best_checkpoint_path = os.path.join(HOME_FOLDER, 'models', 'best_checkpoint.pt')
-#latest_checkpoint_path = os.path.join(HOME_FOLDER, 'models', 'latest_checkpoint.pt')
+latest_checkpoint_path = os.path.join(HOME_FOLDER, 'models', 'latest_checkpoint.pt')
 
-if os.path.exists(best_checkpoint_path):
-    # Load checkpoint
-    checkpoint = torch.load(best_checkpoint_path)
+if os.path.exists(latest_checkpoint_path):
+    checkpoint = torch.load(latest_checkpoint_path)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
     start_epoch = checkpoint['epoch']
@@ -206,7 +122,6 @@ if os.path.exists(best_checkpoint_path):
     best_val_loss = checkpoint['best_val_loss']
     print(f"Loaded checkpoint from epoch {start_epoch}")
 else:
-    # No checkpoint was found
     start_epoch = 0
     train_losses = []
     val_losses = []
@@ -218,291 +133,221 @@ else:
 patience = 10
 early_stopping_counter = 0
 
-#for epoch in range(start_epoch, num_epochs):
-#    if time.time() - start_time > TIMEOUT_THRESHOLD:
-#        print(f"Timeout threshold of {TIMEOUT_THRESHOLD} seconds reached. Stopping training.")
-#        wandb.finish()
-#        sys.stdout.close()
-#        timeout_flag = True
- #       break
+for epoch in range(start_epoch, num_epochs):
+    if time.time() - start_time > TIMEOUT_THRESHOLD:
+        print(f"Timeout threshold of {TIMEOUT_THRESHOLD} seconds reached. Stopping training.")
+        wandb.finish()
+        sys.stdout.close()
+        timeout_flag = True
+        break
+
     # Training loop
-#    model.train()
-#    running_loss = 0.0
-#    correct_predictions = 0
-#    total_predictions = 0
+    model.train()
+    running_loss = 0.0
+    correct_predictions = 0
+    total_predictions = 0
+    all_labels = []
+    all_predictions = []
 
-#    for images, labels in train_dataloader:
-#        images = images.to(device)
-#        labels = labels.to(device)
-
- #       optimizer.zero_grad()
-
- #       outputs = model(images)
- #       loss = criterion(outputs, labels)
- #       loss.backward()
- #       optimizer.step()
-
-#        running_loss += loss.item()
-#        predicted_labels = torch.sigmoid(outputs) > 0.5
-#        correct_predictions += (predicted_labels == labels).float().sum().item()
-#        total_predictions += labels.numel()
+    for images, labels in train_dataloader:
+        images = images.to(device)
+        labels = labels.to(device)
+        optimizer.zero_grad()
+        outputs = model(images)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
+        running_loss += loss.item()
+        predicted_labels = torch.sigmoid(outputs) > PREDICTION_THRESHOLD
+        correct_predictions += (predicted_labels == labels).float().sum().item()
+        total_predictions += labels.numel()
+        all_labels.extend(labels.cpu().numpy())
+        all_predictions.extend(predicted_labels.cpu().numpy())
 
     # Calculate training loss and accuracy
-#    train_loss = running_loss / len(train_dataloader)
-#    train_accuracy = correct_predictions / total_predictions
-#    train_losses.append(train_loss)
-#    train_accuracies.append(train_accuracy)
-#    print(f"Train - Epoch {epoch+1}/{num_epochs} - Loss: {train_loss:.4f} - Accuracy: {train_accuracy:.4f}")
-#    wandb.log({
-#        "Train Loss": train_loss,
-#        "Train Accuracy": train_accuracy,
-#        "Epoch": epoch
-#    })
+    train_loss = running_loss / len(train_dataloader)
+    train_accuracy = correct_predictions / total_predictions
+    train_f1 = f1_score(all_labels, all_predictions, average='macro')
+    train_losses.append(train_loss)
+    train_accuracies.append(train_accuracy)
+
+    print(f"Train - Epoch {epoch+1}/{num_epochs} - Loss: {train_loss:.4f} - Accuracy: {train_accuracy:.4f} - F1: {train_f1:.4f}")
+    wandb.log({
+        "Train Loss": train_loss,
+        "Train Accuracy": train_accuracy,
+        "Train F1 Score": train_f1,
+        "Epoch": epoch
+    })
 
     # Validation loop
-#    model.eval()
-#    running_loss = 0.0
-#    correct_predictions = 0
-#    total_predictions = 0
+    model.eval()
+    running_loss = 0.0
+    correct_predictions = 0
+    total_predictions = 0
+    all_labels = []
+    all_predictions = []
 
-#    with torch.no_grad():
-#        for images, labels in val_dataloader:
-#            images = images.to(device)
-#            labels = labels.to(device)
-#            outputs = model(images)
-#            loss = criterion(outputs, labels)
-
-#            running_loss += loss.item()
-#            predicted_labels = torch.sigmoid(outputs) > 0.5
-#            correct_predictions += (predicted_labels == labels).float().sum().item()
-#            total_predictions += labels.numel()
+    with torch.no_grad():
+        for images, labels in val_dataloader:
+            images = images.to(device)
+            labels = labels.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            running_loss += loss.item()
+            predicted_labels = torch.sigmoid(outputs) > PREDICTION_THRESHOLD
+            correct_predictions += (predicted_labels == labels).float().sum().item()
+            total_predictions += labels.numel()
+            all_labels.extend(labels.cpu().numpy())
+            all_predictions.extend(predicted_labels.cpu().numpy())
 
     # Calculate validation loss and accuracy
-#    val_loss = running_loss / len(val_dataloader)
-#    val_accuracy = correct_predictions / total_predictions
-#    val_losses.append(val_loss)
-#    val_accuracies.append(val_accuracy)
-#    print(f"Val - Epoch {epoch+1}/{num_epochs} - Loss: {val_loss:.4f} - Accuracy: {val_accuracy:.4f}")
-#    wandb.log({
-#        "Validation Loss": val_loss,
-#        "Validation Accuracy": val_accuracy,
-#        "Epoch": epoch
-#    })
+    val_loss = running_loss / len(val_dataloader)
+    val_accuracy = correct_predictions / total_predictions
+    val_f1 = f1_score(all_labels, all_predictions, average='macro')
+    val_losses.append(val_loss)
+    val_accuracies.append(val_accuracy)
+
+    print(f"Val - Epoch {epoch+1}/{num_epochs} - Loss: {val_loss:.4f} - Accuracy: {val_accuracy:.4f} - F1: {val_f1:.4f}")
+    wandb.log({
+        "Validation Loss": val_loss,
+        "Validation Accuracy": val_accuracy,
+        "Validation F1 Score": val_f1,
+        "Epoch": epoch
+    })
 
     # Check for early stopping
-#    if val_loss < best_val_loss:
-#        best_val_loss = val_loss
-#        best_model_state = model.state_dict()
-#        early_stopping_counter = 0
+    if val_loss < best_val_loss:
+        best_val_loss = val_loss
+        best_model_state = model.state_dict()
+        early_stopping_counter = 0
+        # Save the best model
+        torch.save(model.state_dict(), os.path.join(HOME_FOLDER, 'models', 'best_model.pt'))
+        print(f"Saved best model at epoch {epoch+1}")
+    else:
+        early_stopping_counter += 1
+        if early_stopping_counter >= patience:
+            print(f"Early stopping at epoch {epoch+1}")
+            break
 
-        # Save a checkpoint
-#        torch.save({
-#            'epoch': epoch,
-#            'model_state_dict': model.state_dict(),
-#            'optimizer_state_dict': optimizer.state_dict(),
-#            'train_losses': train_losses,
-#            'val_losses': val_losses,
-#            'train_accuracies': train_accuracies,
-#            'val_accuracies': val_accuracies,
-#            'best_val_loss': best_val_loss
-#        }, best_checkpoint_path)
-#    else:
-#        early_stopping_counter += 1
-#        if early_stopping_counter >= patience:
-#            print(f"Early stopping at epoch {epoch+1}")
-#            break
-        
     # Save a checkpoint
-#    torch.save({
-#        'epoch': epoch,
-#        'model_state_dict': model.state_dict(),
-#        'optimizer_state_dict': optimizer.state_dict(),
-#        'train_losses': train_losses,
-#        'val_losses': val_losses,
-#        'train_accuracies': train_accuracies,
-#        'val_accuracies': val_accuracies,
-#        'best_val_loss': best_val_loss
-#    }, latest_checkpoint_path)
-
-# Load the best model state
-#model.load_state_dict(best_model_state)
+    torch.save({
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'train_losses': train_losses,
+        'val_losses': val_losses,
+        'train_accuracies': train_accuracies,
+        'val_accuracies': val_accuracies,
+        'best_val_loss': best_val_loss
+    }, latest_checkpoint_path)
 
 # Plot training and validation loss
-#plt.figure(figsize=(10, 5))
-#plt.subplot(1, 2, 1)
-#plt.plot(range(1, len(train_losses) + 1), train_losses, label='Training Loss')
-#plt.plot(range(1, len(val_losses) + 1), val_losses, label='Validation Loss')
-#plt.xlabel('Epochs')
-#plt.ylabel('Loss')
-#plt.legend()
-#plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', 'loss_plot.png'))
+plt.figure(figsize=(10, 5))
+plt.subplot(1, 2, 1)
+plt.plot(range(1, len(train_losses) + 1), train_losses, label='Training Loss')
+plt.plot(range(1, len(val_losses) + 1), val_losses, label='Validation Loss')
+plt.xlabel('Epochs')
+plt.ylabel('Loss')
+plt.legend()
+plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', 'loss_plot.png'))
 
 # Plot training and validation accuracy
-#plt.subplot(1, 2, 2)
-#plt.plot(range(1, len(train_accuracies) + 1), train_accuracies, label='Training Accuracy')
-#plt.plot(range(1, len(val_accuracies) + 1), val_accuracies, label='Validation Accuracy')
-#plt.xlabel('Epochs')
-#plt.ylabel('Accuracy')
-#plt.legend()
-#plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', 'accuracy_plot.png'))
-
-
+plt.subplot(1, 2, 2)
+plt.plot(range(1, len(train_accuracies) + 1), train_accuracies, label='Training Accuracy')
+plt.plot(range(1, len(val_accuracies) + 1), val_accuracies, label='Validation Accuracy')
+plt.xlabel('Epochs')
+plt.ylabel('Accuracy')
+plt.legend()
+plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', 'accuracy_plot.png'))
 
 # Test set evaluation
-#if not(timeout_flag):
-#    model.eval()
-#    test_running_loss = 0.0
-#    test_correct_predictions = 0
-#    test_total_predictions = 0
-test_batch_size = 4
-test_dataloader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
+if not(timeout_flag):
+    model.eval()
+    test_running_loss = 0.0
+    test_correct_predictions = 0
+    test_total_predictions = 0
+    test_batch_size = 8
+    test_dataloader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
+    test_labels = []
+    test_predictions = []
 
-#    test_labels = []
-#    test_predictions = []
-
-#    with torch.no_grad():
-#        for images, labels in test_dataloader:
-#            images = images.to(device)
-#            labels = labels.to(device)
-#            outputs = model(images)
-#            loss = criterion(outputs, labels)
-#            test_running_loss += loss.item()
-#            predicted = torch.sigmoid(outputs) > 0.5
-#            test_correct_predictions += (predicted == labels).float().sum().item()
-#            test_total_predictions += labels.numel()
-            
- #           predicted = torch.sigmoid(outputs) > PREDICTION_THRESHOLD
-            
-  #          test_labels.append(labels.cpu().numpy())
-  #          test_predictions.append(predicted.cpu().numpy())
-
-  #          test_correct_predictions += (predicted == labels).float().sum().item()
-  #          test_total_predictions += labels.numel()
+    with torch.no_grad():
+        for images, labels in test_dataloader:
+            images = images.to(device)
+            labels = labels.to(device)
+            outputs = model(images)
+            loss = criterion(outputs, labels)
+            test_running_loss += loss.item()
+            predicted = torch.sigmoid(outputs) > PREDICTION_THRESHOLD
+            test_correct_predictions += (predicted == labels).float().sum().item()
+            test_total_predictions += labels.numel()
+            test_labels.append(labels.cpu().numpy())
+            test_predictions.append(predicted.cpu().numpy())
 
     # Flattening the lists of labels and predictions
-#    test_labels_flat = [item for sublist in test_labels for item in sublist]
-#    test_predictions_flat = [item for sublist in test_predictions for item in sublist]
+    test_labels_flat = [item for sublist in test_labels for item in sublist]
+    test_predictions_flat = [item for sublist in test_predictions for item in sublist]
 
     # Calculate F1 score
-#    f1_macro = f1_score(test_labels_flat, test_predictions_flat, average='macro')
-#    f1_weighted = f1_score(test_labels_flat, test_predictions_flat, average='weighted')
-
+    f1_macro = f1_score(test_labels_flat, test_predictions_flat, average='macro')
+    f1_weighted = f1_score(test_labels_flat, test_predictions_flat, average='weighted')
 
     # Calculate test set loss and accuracy
-#    test_epoch_loss = test_running_loss / len(test_dataloader)
-#    test_epoch_accuracy = test_correct_predictions / test_total_predictions
-#    print(f"Test Evaluation - Loss: {test_epoch_loss:.4f} - Accuracy: {test_epoch_accuracy:.4f}")
+    test_epoch_loss = test_running_loss / len(test_dataloader)
+    test_epoch_accuracy = test_correct_predictions / test_total_predictions
 
- #   wandb.log({
- #       "Test Loss": test_epoch_loss,
- #       "Test Accuracy": test_epoch_accuracy,
- #       "Test Macro F1": f1_macro,
- #       "Test Weighted F1": f1_weighted
- #   })
- #   wandb.finish()
- #   sys.stdout.close()
-    
-    #conf_matrix = confusion_matrix(test_labels_flat, test_predictions_flat)
-    #plt.figure(figsize=(10, 8))
-    #sns.heatmap(conf_matrix, annot=True, fmt="d", cmap='Blues')
-    #plt.xlabel('Predicted')
-    #plt.ylabel('True')
-    #plt.title('Confusion Matrix: Test Set')
-    #plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', 'test_confusion_matrix.png'))
+    print(f"Test Evaluation - Loss: {test_epoch_loss:.4f} - Accuracy: {test_epoch_accuracy:.4f}")
+    wandb.log({
+        "Test Loss": test_epoch_loss,
+        "Test Accuracy": test_epoch_accuracy,
+        "Test Macro F1": f1_macro,
+        "Test Weighted F1": f1_weighted
+    })
 
+    wandb.finish()
+    sys.stdout.close()
 
+    conf_matrix = confusion_matrix(test_labels_flat, test_predictions_flat)
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(conf_matrix, annot=True, fmt="d", cmap='Blues')
+    plt.xlabel('Predicted')
+    plt.ylabel('True')
+    plt.title('Confusion Matrix: Test Set')
+    plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', 'test_confusion_matrix.png'))
 
+# GradCAM
+    cam = GradCAM(model=model, target_layers=[model.layer4[-1]], use_cuda=torch.cuda.is_available())
+    class_names = train_dataset.annotations.columns[1:]  # Assuming the class names are the column names, excluding 'global_key'
 
+    for i, (images, labels) in enumerate(test_dataloader):
+        images = images.to(device)
+        for j in range(len(class_names)):
+            grayscale_cam = cam(input_tensor=images, target_category=j)
+            
+            for k in range(images.size(0)):
+                original_image = images[k].permute(1, 2, 0).detach().cpu().numpy()
+                original_image = original_image * np.array([0.229, 0.224, 0.225]) + np.array([0.485, 0.456, 0.406])
+                original_image = np.clip(original_image, 0, 1)
 
+                visualization = show_cam_on_image(original_image, grayscale_cam[k, :], use_rgb=True)
 
-model.eval()
+                original_image_name = test_dataset.annotations.loc[i * test_batch_size + k, "global_key"]
+                os.makedirs(f"{HOME_FOLDER}/reports/figures/saliency/test/{original_image_name}", exist_ok=True)
 
+                plt.figure(figsize=(10, 5))
+                plt.subplot(1, 2, 1)
+                plt.imshow(original_image)
+                plt.title('Original Image')
+                plt.axis('off')
 
-# Specify the filename
-filename = "c9a4f7c4-8ed1-4bc7-934d-711b5cd41b81"
+                plt.subplot(1, 2, 2)
+                plt.imshow(visualization)
+                plt.title(f'GradCAM: {class_names[j]}')
+                plt.axis('off')
 
-index = test_dataset.annotations[test_dataset.annotations['global_key'] == filename.split(".")[0]].index.item()
-    
-# Use the __getitem__ method to retrieve the image and label
-image, label = test_dataset[index]
+                plt.savefig(f"{HOME_FOLDER}/reports/figures/saliency/test/{original_image_name}/{class_names[j]}_gradcam.jpg")
+                plt.close()
 
-image = image.unsqueeze(0).to(device)  # Add batch dimension and move to device
-image.requires_grad = True
+    print("GradCAM saliency maps generated.")
 
-# Forward pass
-outputs = model(image)
-outputs = torch.sigmoid(outputs)
-
-# Get class names excluding 'global_key'
-class_names = train_dataset.annotations.columns[1:]
-
-# Loop over each class
-for j, class_name in enumerate(class_names):
-    model.zero_grad()
-    outputs[:, j].backward(torch.ones_like(outputs[:, j]), retain_graph=True)
-
-    # Compute saliency
-    saliency, _ = torch.max(image.grad.data.abs(), dim=1)
-    saliency = saliency.cpu().numpy()
-
-    # Retrieve the original image
-    original_image = image.squeeze(0).permute(1, 2, 0).detach().cpu().numpy()  # Remove batch dimension
-    original_image = original_image * np.array([0.229, 0.224, 0.225]) + np.array([0.485, 0.456, 0.406])
-    original_image = np.clip(original_image, 0, 1)
-
-    # Compute class saliency
-    class_saliency = saliency[0] * outputs[0, j].item()
-
-    # Optional: Smooth the saliency map
-    smoothed_saliency = gaussian_filter(class_saliency, sigma=5)
-
-    # Plot and save
-    plt.figure()
-    plt.imshow(original_image)
-    plt.imshow(smoothed_saliency, cmap='bwr', alpha=0.5)
-    plt.axis('off')
-    os.makedirs(f"{HOME_FOLDER}/reports/figures/saliency/test/{filename}", exist_ok=True)
-    plt.savefig(f"{HOME_FOLDER}/reports/figures/saliency/test/{filename}/{class_name}.jpg")
-    plt.close()
-
-    # Saliency map generation
-#model.eval()
-#class_names = train_dataset.annotations.columns[1:]  # Assuming the class names are the column names, excluding 'global_key'
-
-""" for i, (images, labels) in enumerate(test_dataloader):
-    images = images.to(device)
-    images.requires_grad = True
-
-    outputs = model(images)
-    outputs = torch.sigmoid(outputs)
-
-    for j in range(len(class_names)):
-        model.zero_grad()
-        outputs[:, j].backward(torch.ones_like(outputs[:, j]), retain_graph=True)
-
-        saliency, _ = torch.max(images.grad.data.abs(), dim=1)
-        saliency = saliency.cpu().numpy()
-        # Save saliency maps
-        for k in range(images.size(0)):
-#            # Get the original image
-            original_image = images[k].permute(1, 2, 0).detach().cpu().numpy()
-#            # Reverse normalization
-            original_image = original_image * np.array([0.229, 0.224, 0.225]) + np.array([0.485, 0.456, 0.406])
-            # Clip to be in range [0,1] (optional)
-            original_image = np.clip(original_image, 0, 1)
-            original_image_name = test_dataset.annotations.loc[i * batch_size + k, "global_key"]
-            os.makedirs(f"{HOME_FOLDER}/reports/figures/saliency/test/{original_image_name}", exist_ok=True)
-
-            # Get the saliency map for the current class and multiply by the class prediction
-            class_saliency = saliency[k] * outputs[k, j].item()
-
-            smoothed_saliency = gaussian_filter(class_saliency, sigma=5)  # Adjust sigma as needed
-            # Create a new figure, plot the original image, and add the saliency map overlay
-            plt.figure()
-            plt.imshow(original_image)
-            plt.imshow(smoothed_saliency, cmap='bwr', alpha=0.5)  # overlay saliency map
-            plt.axis('off')
-
-            plt.savefig(f"{HOME_FOLDER}/reports/figures/saliency/test/{original_image_name}/{class_names[j]}.jpg")
-            plt.close()  # Closes the figure, so it doesn't get displayed in your Python environment
- """
+print("Training, evaluation, and saliency map generation completed.")
