@@ -20,6 +20,8 @@ from sklearn.metrics import f1_score, confusion_matrix
 import seaborn as sns
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.image import show_cam_on_image
+from sklearn.metrics import multilabel_confusion_matrix, classification_report
+
 
 start_time = time.time()
 timeout_flag = False
@@ -268,8 +270,8 @@ if not(timeout_flag):
     test_total_predictions = 0
     test_batch_size = 8
     test_dataloader = DataLoader(test_dataset, batch_size=test_batch_size, shuffle=False)
-    test_labels = []
-    test_predictions = []
+    all_labels = []
+    all_predictions = []
 
     with torch.no_grad():
         for images, labels in test_dataloader:
@@ -281,40 +283,55 @@ if not(timeout_flag):
             predicted = torch.sigmoid(outputs) > PREDICTION_THRESHOLD
             test_correct_predictions += (predicted == labels).float().sum().item()
             test_total_predictions += labels.numel()
-            test_labels.append(labels.cpu().numpy())
-            test_predictions.append(predicted.cpu().numpy())
+            all_labels.append(labels.cpu().numpy())
+            all_predictions.append(predicted.cpu().numpy())
 
-    # Flattening the lists of labels and predictions
-    test_labels_flat = [item for sublist in test_labels for item in sublist]
-    test_predictions_flat = [item for sublist in test_predictions for item in sublist]
+    # Concatenate all batches
+    all_labels = np.concatenate(all_labels)
+    all_predictions = np.concatenate(all_predictions)
 
-    # Calculate F1 score
-    f1_macro = f1_score(test_labels_flat, test_predictions_flat, average='macro')
-    f1_weighted = f1_score(test_labels_flat, test_predictions_flat, average='weighted')
+    # Calculate F1 scores
+    f1_macro = f1_score(all_labels, all_predictions, average='macro')
+    f1_micro = f1_score(all_labels, all_predictions, average='micro')
+    f1_weighted = f1_score(all_labels, all_predictions, average='weighted')
 
     # Calculate test set loss and accuracy
     test_epoch_loss = test_running_loss / len(test_dataloader)
     test_epoch_accuracy = test_correct_predictions / test_total_predictions
 
     print(f"Test Evaluation - Loss: {test_epoch_loss:.4f} - Accuracy: {test_epoch_accuracy:.4f}")
+    print(f"Macro F1: {f1_macro:.4f}, Micro F1: {f1_micro:.4f}, Weighted F1: {f1_weighted:.4f}")
+
+    # Log to wandb
     wandb.log({
         "Test Loss": test_epoch_loss,
         "Test Accuracy": test_epoch_accuracy,
         "Test Macro F1": f1_macro,
+        "Test Micro F1": f1_micro,
         "Test Weighted F1": f1_weighted
     })
 
+    # Calculate confusion matrix for each class
+    conf_matrices = multilabel_confusion_matrix(all_labels, all_predictions)
+
+    # Plot confusion matrix for each class
+    class_names = train_dataset.annotations.columns[1:]  # Assuming the class names are the column names, excluding 'global_key'
+    for i, conf_matrix in enumerate(conf_matrices):
+        plt.figure(figsize=(8, 6))
+        sns.heatmap(conf_matrix, annot=True, fmt="d", cmap='Blues')
+        plt.xlabel('Predicted')
+        plt.ylabel('True')
+        plt.title(f'Confusion Matrix: {class_names[i]}')
+        plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', f'confusion_matrix_{class_names[i]}.png'))
+        plt.close()
+
+    # Print classification report
+    print("\nClassification Report:")
+    print(classification_report(all_labels, all_predictions, target_names=class_names))
+
     wandb.finish()
     sys.stdout.close()
-
-    conf_matrix = confusion_matrix(test_labels_flat, test_predictions_flat)
-    plt.figure(figsize=(10, 8))
-    sns.heatmap(conf_matrix, annot=True, fmt="d", cmap='Blues')
-    plt.xlabel('Predicted')
-    plt.ylabel('True')
-    plt.title('Confusion Matrix: Test Set')
-    plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', 'test_confusion_matrix.png'))
-
+    
 # GradCAM
     cam = GradCAM(model=model, target_layers=[model.layer4[-1]], use_cuda=torch.cuda.is_available())
     class_names = train_dataset.annotations.columns[1:]  # Assuming the class names are the column names, excluding 'global_key'
