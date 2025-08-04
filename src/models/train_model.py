@@ -2,9 +2,8 @@ import torch
 import torchvision.models as models
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
 import torchvision.transforms as transforms
-from torch.utils.data import Dataset
 import pandas as pd
 from PIL import Image
 import os
@@ -16,12 +15,10 @@ import matplotlib.pyplot as plt
 import wandb
 import sys
 import time
-from sklearn.metrics import f1_score, confusion_matrix
+from sklearn.metrics import f1_score, confusion_matrix, precision_recall_fscore_support, multilabel_confusion_matrix, classification_report
 import seaborn as sns
 from pytorch_grad_cam import GradCAM
-from pytorch_grad_cam.utils.image import show_cam_on_image
-from sklearn.metrics import multilabel_confusion_matrix, classification_report
-
+from pytorch_grad_cam.utils.image import show_cam_on_image 
 
 start_time = time.time()
 timeout_flag = False
@@ -44,11 +41,11 @@ wandb.init(project=os.environ['WANDB_PROJECT'], entity=os.environ['WANDB_ENTITY'
 transform = transforms.Compose([
     transforms.RandomResizedCrop(224),
     transforms.RandomHorizontalFlip(),
-    transforms.RandomVerticalFlip(),
-    transforms.ColorJitter(brightness=0.1, contrast=0.1, saturation=0.1, hue=0.1),
+    transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.1, hue=0.05),
     transforms.RandomGrayscale(p=0.2),
     transforms.RandomRotation(15),
     transforms.RandomAffine(0, translate=(0.1, 0.1), scale=(0.9, 1.1)),
+    transforms.RandomApply([transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 1.0))], p=0.1),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
 ])
@@ -93,19 +90,33 @@ test_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'test.csv', roo
 model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
 num_classes = len(train_dataset.annotations.columns) - 1
 num_features = model.fc.in_features
+class_names = train_dataset.annotations.columns[1:].tolist()
 model.fc = nn.Linear(num_features, num_classes)
 
-criterion = nn.BCEWithLogitsLoss()
-optimizer = optim.Adam(model.parameters(), lr=0.001)
+# Calculate class weights for weighted batch sampling
+class_counts = torch.sum(torch.tensor(train_dataset.annotations.iloc[:, 1:].values), dim=0)
+class_weights = 1.0 / class_counts
+sample_weights = torch.zeros(len(train_dataset))
+
+for idx in range(len(train_dataset)):
+    labels = torch.tensor(train_dataset.annotations.iloc[idx, 1:].values)
+    sample_weights[idx] = torch.sum(class_weights * labels)
+
+sampler = WeightedRandomSampler(sample_weights, len(train_dataset), replacement=True)
 
 # Training the model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+criterion = nn.BCEWithLogitsLoss()
+#criterion = nn.BCEWithLogitsLoss(pos_weight=class_weights.to(device)) to be used in second scenario
+optimizer = optim.Adam(model.parameters(), lr=0.001)
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3)
 model = model.to(device)
 
 min_val_loss = np.inf
 num_epochs = 20
 batch_size = 32
-train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) # sampler to be changed in second scenario
 val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
 # Check for existing checkpoint
@@ -116,6 +127,7 @@ if os.path.exists(latest_checkpoint_path):
     checkpoint = torch.load(latest_checkpoint_path)
     model.load_state_dict(checkpoint['model_state_dict'])
     optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
     start_epoch = checkpoint['epoch']
     train_losses = checkpoint['train_losses']
     val_losses = checkpoint['val_losses']
@@ -158,6 +170,7 @@ for epoch in range(start_epoch, num_epochs):
         outputs = model(images)
         loss = criterion(outputs, labels)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         running_loss += loss.item()
         predicted_labels = torch.sigmoid(outputs) > PREDICTION_THRESHOLD
@@ -216,6 +229,20 @@ for epoch in range(start_epoch, num_epochs):
         "Validation F1 Score": val_f1,
         "Epoch": epoch
     })
+    
+    precision, recall, f1_per_class, support = precision_recall_fscore_support(
+        all_labels, all_predictions, average=None, zero_division=0
+    )
+    for i, class_name in enumerate(class_names):
+        wandb.log({
+            f"Val_Precision_{class_name}": precision[i],
+            f"Val_Recall_{class_name}": recall[i], 
+            f"Val_F1_{class_name}": f1_per_class[i],
+            "Epoch": epoch
+        })
+    
+    scheduler.step(val_loss)
+    wandb.log({"Learning_Rate": optimizer.param_groups[0]['lr'], "Epoch": epoch})
 
     # Check for early stopping
     if val_loss < best_val_loss:
@@ -236,10 +263,13 @@ for epoch in range(start_epoch, num_epochs):
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
         'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
         'train_losses': train_losses,
         'val_losses': val_losses,
         'train_accuracies': train_accuracies,
         'val_accuracies': val_accuracies,
+        'train_f1s': train_f1,               
+        'val_f1s': val_f1, 
         'best_val_loss': best_val_loss
     }, latest_checkpoint_path)
 
@@ -310,6 +340,17 @@ if not(timeout_flag):
         "Test Micro F1": f1_micro,
         "Test Weighted F1": f1_weighted
     })
+    
+    test_precision, test_recall, test_f1_per_class, test_support = precision_recall_fscore_support(
+        all_labels, all_predictions, average=None, zero_division=0
+    )
+    for i, class_name in enumerate(class_names):
+        wandb.log({
+            f"Test_Precision_{class_name}": test_precision[i],
+            f"Test_Recall_{class_name}": test_recall[i], 
+            f"Test_F1_{class_name}": test_f1_per_class[i]
+        })
+
 
     # Calculate confusion matrix for each class
     conf_matrices = multilabel_confusion_matrix(all_labels, all_predictions)
