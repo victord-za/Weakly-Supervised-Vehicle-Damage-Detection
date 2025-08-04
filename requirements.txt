@@ -3,12 +3,10 @@ torchvision
 pandas
 Pillow
 numpy
-python-dotenv 
-pathlib
+python-dotenv
 matplotlib
-logging
 requests
 scikit-learn
 seaborn
 wandb
-dotenv
+pytorch-grad-cam
