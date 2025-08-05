@@ -9,4 +9,7 @@ requests
 scikit-learn
 seaborn
 wandb
-pytorch-grad-cam
+grad-cam
+ultralytics
+opencv-python
+PyYAML
