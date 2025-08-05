@@ -35,7 +35,9 @@ sys.stdout = open(os.path.join(os.getenv('HOME_FOLDER'), 'reports', 'training_lo
 os.environ['WANDB_API_KEY'] = os.getenv('WANDB_API_KEY')
 os.environ['WANDB_ENTITY'] = os.getenv('WANDB_ENTITY')
 os.environ['WANDB_PROJECT'] = os.getenv('WANDB_PROJECT')
+os.environ["WANDB_MODE"] = "offline"
 wandb.init(project=os.environ['WANDB_PROJECT'], entity=os.environ['WANDB_ENTITY'], resume="allow")
+
 
 # Define the transforms for data augmentation
 transform = transforms.Compose([
