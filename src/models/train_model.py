@@ -32,11 +32,11 @@ HOME_FOLDER = os.getenv('HOME_FOLDER')
 sys.stdout = open(os.path.join(os.getenv('HOME_FOLDER'), 'reports', 'training_log.txt'), 'w')
 
 # Set up weights and biases for logging
-#os.environ['WANDB_API_KEY'] = os.getenv('WANDB_API_KEY')
-#os.environ['WANDB_ENTITY'] = os.getenv('WANDB_ENTITY')
-#os.environ['WANDB_PROJECT'] = os.getenv('WANDB_PROJECT')
-#os.environ["WANDB_MODE"] = "offline"
-#wandb.init(project=os.environ['WANDB_PROJECT'], entity=os.environ['WANDB_ENTITY'], resume="allow")
+os.environ['WANDB_API_KEY'] = os.getenv('WANDB_API_KEY')
+os.environ['WANDB_ENTITY'] = os.getenv('WANDB_ENTITY')
+os.environ['WANDB_PROJECT'] = os.getenv('WANDB_PROJECT')
+os.environ["WANDB_MODE"] = "offline"
+wandb.init(project=os.environ['WANDB_PROJECT'], entity=os.environ['WANDB_ENTITY'], resume="allow")
 
 
 # Define the transforms for data augmentation
@@ -85,8 +85,8 @@ class VehicleDamageDataset(Dataset):
 
 # Define the datasets
 train_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'train.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'train', transform=transform)
-#val_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'val.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'val', transform=val_transform)
-#test_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'test.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'test', transform=val_transform)
+val_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'val.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'val', transform=val_transform)
+test_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'test.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'test', transform=val_transform)
 
 # Define the model
 model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
