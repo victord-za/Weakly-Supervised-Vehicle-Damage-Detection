@@ -192,7 +192,10 @@ def train():
         
     finally:
         wandb.finish()
-        sys.stdout.close()
+        if hasattr(sys.stdout, 'close'):
+            log_file = sys.stdout
+            sys.stdout = sys.__stdout__ 
+            log_file.close()
     
     return not timeout_flag
 
