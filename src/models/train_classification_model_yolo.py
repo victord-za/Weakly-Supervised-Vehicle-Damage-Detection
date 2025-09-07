@@ -58,7 +58,7 @@ def train():
     LAST_CHECKPOINT_PATH = CHECKPOINT_DIR / 'last.pt'
     
     # Data configuration - should point to your generated YOLO labels
-    data_config = Path(HOME_FOLDER) / 'data' / 'yolo_multilabel_damage' / 'data.yaml'
+    data_config = Path(DATA_FOLDER) / 'data.yaml'
     
     # Verify data config exists
     if not data_config.exists():
