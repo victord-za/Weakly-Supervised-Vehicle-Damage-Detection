@@ -39,6 +39,7 @@ def train():
     os.environ['WANDB_API_KEY'] = os.getenv('WANDB_API_KEY')
     os.environ['WANDB_ENTITY'] = os.getenv('WANDB_ENTITY')
     os.environ['WANDB_PROJECT'] = os.getenv('WANDB_PROJECT')
+    os.environ["WANDB_MODE"] = "offline"
     
     if not all([os.getenv('WANDB_API_KEY'), os.getenv('WANDB_ENTITY'), os.getenv('WANDB_PROJECT')]):
         raise ValueError("Please set WANDB_API_KEY, WANDB_ENTITY, and WANDB_PROJECT environment variables.")
