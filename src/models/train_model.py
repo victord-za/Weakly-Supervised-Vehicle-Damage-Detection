@@ -84,9 +84,9 @@ class VehicleDamageDataset(Dataset):
         return image, label
 
 # Define the datasets
-train_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'train.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'train', transform=transform)
-val_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'val.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'val', transform=val_transform)
-test_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'test.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'test', transform=val_transform)
+train_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'train_consolidated.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'train', transform=transform)
+val_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'val_consolidated.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'val', transform=val_transform)
+test_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'test_consolidated.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'test', transform=val_transform)
 
 # Define the model
 model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
@@ -97,7 +97,8 @@ model.fc = nn.Linear(num_features, num_classes)
 
 # Calculate class weights for weighted batch sampling
 class_counts = torch.sum(torch.tensor(train_dataset.annotations.iloc[:, 1:].values), dim=0)
-class_weights = 1.0 / class_counts
+class_weights = 1.0 / class_counts.float()
+#class_weights = torch.clamp(class_weights, max=100.0) 
 sample_weights = torch.zeros(len(train_dataset))
 
 for idx in range(len(train_dataset)):
@@ -108,22 +109,23 @@ sampler = WeightedRandomSampler(sample_weights, len(train_dataset), replacement=
 
 # Training the model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-criterion = nn.BCEWithLogitsLoss()
-#criterion = nn.BCEWithLogitsLoss(pos_weight=class_weights.to(device)) to be used in second scenario
+#criterion = nn.BCEWithLogitsLoss() scenario one
+criterion = nn.BCEWithLogitsLoss(pos_weight=class_weights.to(device)) #to be used in second scenario
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3)
 model = model.to(device)
 
 min_val_loss = np.inf
-num_epochs = 20
+num_epochs = 30
 batch_size = 32
 
-train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) # sampler to be changed in second scenario
+#train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) # sampler to be changed in second scenario
+train_dataloader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
 val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
 # Check for existing checkpoint
-best_checkpoint_path = os.path.join(HOME_FOLDER, 'models', 'best_checkpoint.pt')
-latest_checkpoint_path = os.path.join(HOME_FOLDER, 'models', 'latest_checkpoint.pt')
+best_checkpoint_path = os.path.join(HOME_FOLDER, 'models', 'best_checkpoint_consolidated.pt')
+latest_checkpoint_path = os.path.join(HOME_FOLDER, 'models', 'latest_checkpoint_consolidated.pt')
 
 if os.path.exists(latest_checkpoint_path):
     checkpoint = torch.load(latest_checkpoint_path)
@@ -252,7 +254,7 @@ for epoch in range(start_epoch, num_epochs):
         best_model_state = model.state_dict()
         early_stopping_counter = 0
         # Save the best model
-        torch.save(model.state_dict(), os.path.join(HOME_FOLDER, 'models', 'best_model.pt'))
+        torch.save(model.state_dict(), os.path.join(HOME_FOLDER, 'models', 'best_model_consolidated.pt'))
         print(f"Saved best model at epoch {epoch+1}")
     else:
         early_stopping_counter += 1
@@ -283,7 +285,7 @@ plt.plot(range(1, len(val_losses) + 1), val_losses, label='Validation Loss')
 plt.xlabel('Epochs')
 plt.ylabel('Loss')
 plt.legend()
-plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', 'loss_plot.png'))
+plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', 'loss_plot_consolidated.png'))
 
 # Plot training and validation accuracy
 plt.subplot(1, 2, 2)
@@ -292,7 +294,7 @@ plt.plot(range(1, len(val_accuracies) + 1), val_accuracies, label='Validation Ac
 plt.xlabel('Epochs')
 plt.ylabel('Accuracy')
 plt.legend()
-plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', 'accuracy_plot.png'))
+plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', 'accuracy_plot_consolidated.png'))
 
 # Test set evaluation
 if not(timeout_flag):
@@ -363,7 +365,7 @@ if not(timeout_flag):
         plt.figure(figsize=(8, 6))
         sns.heatmap(conf_matrix, annot=True, fmt="d", cmap='Blues')
         plt.xlabel('Predicted')
-        plt.ylabel('True')
+        plt.ylabel('Actual')
         plt.title(f'Confusion Matrix: {class_names[i]}')
         plt.savefig(os.path.join(HOME_FOLDER, 'reports', 'figures', 'results', f'confusion_matrix_{class_names[i]}.png'))
         plt.close()
