@@ -84,9 +84,9 @@ class VehicleDamageDataset(Dataset):
         return image, label
 
 # Define the datasets
-train_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'train_consolidated.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'train', transform=transform)
-val_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'val_consolidated.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'val', transform=val_transform)
-test_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'test_consolidated.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'test', transform=val_transform)
+train_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'train_consolidated.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'train' / 'images', transform=transform)
+val_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'val_consolidated.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'val' / 'images', transform=val_transform)
+test_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'test_consolidated.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'test' / 'images', transform=val_transform)
 
 # Define the model
 model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
