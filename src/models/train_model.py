@@ -19,6 +19,7 @@ from sklearn.metrics import f1_score, confusion_matrix, precision_recall_fscore_
 import seaborn as sns
 from pytorch_grad_cam import GradCAM
 from pytorch_grad_cam.utils.image import show_cam_on_image 
+import torch.nn.functional as F
 
 start_time = time.time()
 timeout_flag = False
@@ -83,6 +84,36 @@ class VehicleDamageDataset(Dataset):
         label = torch.tensor(self.annotations.iloc[index, 1:].values.astype(np.float32))
         return image, label
 
+class FocalLoss(nn.Module):
+    def __init__(self, alpha=None, gamma=2.0, reduction='mean'):
+        super(FocalLoss, self).__init__()
+        self.alpha = alpha  # pos_weight for positive class
+        self.gamma = gamma
+        self.reduction = reduction
+    
+    def forward(self, inputs, targets):
+        # BCE loss with pos_weight
+        BCE_loss = F.binary_cross_entropy_with_logits(
+            inputs, targets, pos_weight=self.alpha, reduction='none'
+        )
+        
+        # Get probabilities
+        pt = torch.sigmoid(inputs)
+        
+        # For positive samples, pt = p; for negative samples, pt = 1-p
+        pt = torch.where(targets == 1, pt, 1 - pt)
+        
+        # Apply focal term
+        focal_weight = (1 - pt) ** self.gamma
+        focal_loss = focal_weight * BCE_loss
+        
+        if self.reduction == 'mean':
+            return focal_loss.mean()
+        elif self.reduction == 'sum':
+            return focal_loss.sum()
+        else:
+            return focal_loss
+
 # Define the datasets
 train_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'train_consolidated.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'train' / 'images', transform=transform)
 val_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'val_consolidated.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'val' / 'images', transform=val_transform)
@@ -117,7 +148,7 @@ loss_weights = 1.0 / effective_num
 # Training the model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 #criterion = nn.BCEWithLogitsLoss() scenario one
-criterion = nn.BCEWithLogitsLoss(pos_weight=loss_weights.to(device)) #to be used in second scenario
+criterion = FocalLoss(alpha=loss_weights.to(device), gamma=2.0) #to be used in second scenario
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3)
 model = model.to(device)
