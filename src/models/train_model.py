@@ -97,8 +97,9 @@ model.fc = nn.Linear(num_features, num_classes)
 
 # Calculate class weights for weighted batch sampling
 class_counts = torch.sum(torch.tensor(train_dataset.annotations.iloc[:, 1:].values), dim=0)
+"""
 class_weights = 1.0 / class_counts.float()
-#class_weights = torch.clamp(class_weights, max=100.0) 
+class_weights = torch.clamp(class_weights, max=100.0) 
 sample_weights = torch.zeros(len(train_dataset))
 
 for idx in range(len(train_dataset)):
@@ -106,11 +107,17 @@ for idx in range(len(train_dataset)):
     sample_weights[idx] = torch.sum(class_weights * labels)
 
 sampler = WeightedRandomSampler(sample_weights, len(train_dataset), replacement=True)
+"""
+
+# Effective number reweighting
+beta = 0.9999
+effective_num = (1 - torch.pow(beta, class_counts.float())) / (1 - beta)
+loss_weights = 1.0 / effective_num
 
 # Training the model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 #criterion = nn.BCEWithLogitsLoss() scenario one
-criterion = nn.BCEWithLogitsLoss(pos_weight=class_weights.to(device)) #to be used in second scenario
+criterion = nn.BCEWithLogitsLoss(pos_weight=loss_weights.to(device)) #to be used in second scenario
 optimizer = optim.Adam(model.parameters(), lr=0.001)
 scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, 'min', patience=3)
 model = model.to(device)
@@ -120,7 +127,7 @@ num_epochs = 30
 batch_size = 32
 
 #train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True) # sampler to be changed in second scenario
-train_dataloader = DataLoader(train_dataset, batch_size=batch_size, sampler=sampler)
+train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
 val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=True)
 
 # Check for existing checkpoint
