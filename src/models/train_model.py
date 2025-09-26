@@ -2,7 +2,7 @@ import torch
 import torchvision.models as models
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
+from torch.utils.data import DataLoader, Dataset
 import torchvision.transforms as transforms
 import pandas as pd
 from PIL import Image
@@ -10,7 +10,8 @@ import os
 import numpy as np
 from dotenv import find_dotenv, load_dotenv
 from pathlib import Path
-from torchvision.models import resnet50, ResNet50_Weights
+from torchvision.models import resnet50, ResNet50_Weights, convnext_tiny, ConvNeXt_Tiny_Weights
+
 import matplotlib.pyplot as plt
 import wandb
 import sys
@@ -119,31 +120,20 @@ train_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'train_consoli
 val_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'val_consolidated.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'val' / 'images', transform=val_transform)
 test_dataset = VehicleDamageDataset(csv_file=Path(DATA_FOLDER) / 'test_consolidated.csv', root_dir=Path(DATA_FOLDER) / 'final' / 'test' / 'images', transform=val_transform)
 
-# Define the model
-model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
 num_classes = len(train_dataset.annotations.columns) - 1
 num_features = model.fc.in_features
 class_names = train_dataset.annotations.columns[1:].tolist()
-model.fc = nn.Linear(num_features, num_classes)
+
+# Define the model
+#model = resnet50(weights=ResNet50_Weights.IMAGENET1K_V2)
+#model.fc = nn.Linear(num_features, num_classes)
+
+model = convnext_tiny(weights=ConvNeXt_Tiny_Weights.IMAGENET1K_V1)
+model.classifier[2] = nn.Linear(model.classifier[2].in_features, num_classes)
 
 # Calculate class weights for weighted batch sampling
 class_counts = torch.sum(torch.tensor(train_dataset.annotations.iloc[:, 1:].values), dim=0)
-"""
-class_weights = 1.0 / class_counts.float()
-class_weights = torch.clamp(class_weights, max=100.0) 
-sample_weights = torch.zeros(len(train_dataset))
-
-for idx in range(len(train_dataset)):
-    labels = torch.tensor(train_dataset.annotations.iloc[idx, 1:].values.astype(bool))
-    sample_weights[idx] = torch.sum(class_weights * labels)
-
-sampler = WeightedRandomSampler(sample_weights, len(train_dataset), replacement=True)
-"""
-
-# Effective number reweighting
-beta = 0.9999
-effective_num = (1 - torch.pow(beta, class_counts.float())) / (1 - beta)
-loss_weights = 1.0 / effective_num
+loss_weights = torch.sqrt(class_counts.max().float() / class_counts.float())
 
 # Training the model
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
