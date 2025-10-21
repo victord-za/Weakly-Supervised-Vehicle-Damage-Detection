@@ -20,6 +20,7 @@ def validate_setup():
     """Basic setup validation"""
     load_dotenv(find_dotenv())
     HOME_FOLDER = os.getenv('HOME_FOLDER')
+    DATA_FOLDER = os.getenv('DATA_FOLDER')
     
     if not HOME_FOLDER:
         raise ValueError("HOME_FOLDER environment variable not set")
@@ -27,7 +28,8 @@ def validate_setup():
     required_dirs = [
         Path(HOME_FOLDER) / 'models' / 'yolo11_seg',
         Path(HOME_FOLDER) / 'data' / 'external',
-        Path(HOME_FOLDER) / 'reports'
+        Path(HOME_FOLDER) / 'reports',
+        Path(DATA_FOLDER) / 'external'
     ]
     
     for dir_path in required_dirs:
@@ -87,9 +89,9 @@ def setup_logging_and_wandb(HOME_FOLDER):
     return timestamp, wandb_run
 
 
-def validate_dataset(HOME_FOLDER):
+def validate_dataset(DATA_FOLDER):
     """Validate dataset configuration and files"""
-    data_config = Path(HOME_FOLDER) / 'data' / 'external' / 'cardd.yaml'
+    data_config = Path(DATA_FOLDER) / 'external' / 'cardd.yaml'
     
     if not data_config.exists():
         raise FileNotFoundError(f"Data configuration file not found: {data_config}")
@@ -446,7 +448,7 @@ def train(HOME_FOLDER, data_config, data_info, model, MODEL_SIZE, YOLO_CONFIG, C
     return model, final_metrics
 
 
-def evaluate_test(HOME_FOLDER, model, data_info, timestamp, wandb_run):
+def evaluate_test(HOME_FOLDER, DATA_FOLDER, model, data_info, timestamp, wandb_run):
     """Evaluate the trained model on test set"""
     print("="*50)
     print("Starting test set evaluation...")
@@ -487,7 +489,7 @@ def evaluate_test(HOME_FOLDER, model, data_info, timestamp, wandb_run):
         print(f"Using validation batch size: {val_batch_size}")
         
         test_results = model.val(
-            data=Path(HOME_FOLDER) / 'data' / 'external' / 'cardd.yaml',
+            data=Path(DATA_FOLDER) 'external' / 'cardd.yaml',
             split='test',
             batch=val_batch_size,
             save_json=True,
@@ -663,13 +665,13 @@ def main():
     """Main execution function"""
     try:
         print("Step 1: Validating setup...")
-        HOME_FOLDER = validate_setup()
+        HOME_FOLDER, DATA_FOLDER = validate_setup()
         
         print("\nStep 2: Setting up logging and W&B...")
         timestamp, wandb_run = setup_logging_and_wandb(HOME_FOLDER)
         
         print("\nStep 3: Validating dataset...")
-        data_config, data_info = validate_dataset(HOME_FOLDER)
+        data_config, data_info = validate_dataset(DATA_FOLDER)
         
         print("\nStep 4: Initializing model...")
         model, MODEL_SIZE, YOLO_CONFIG, CHECKPOINT_DIR = get_model(HOME_FOLDER)
@@ -681,7 +683,7 @@ def main():
         )
         
         print("\nStep 6: Evaluating on test set...")
-        test_metrics, prediction_summary = evaluate_test(HOME_FOLDER, trained_model, data_info, timestamp, wandb_run)
+        test_metrics, prediction_summary = evaluate_test(HOME_FOLDER, DATA_FOLDER, trained_model, data_info, timestamp, wandb_run)
         
         print("\n" + "="*50)
         print("TRAINING PIPELINE COMPLETED SUCCESSFULLY")
