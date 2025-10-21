@@ -489,7 +489,7 @@ def evaluate_test(HOME_FOLDER, DATA_FOLDER, model, data_info, timestamp, wandb_r
         print(f"Using validation batch size: {val_batch_size}")
         
         test_results = model.val(
-            data=Path(DATA_FOLDER) 'external' / 'cardd.yaml',
+            data=Path(DATA_FOLDER) / 'external' / 'cardd.yaml',
             split='test',
             batch=val_batch_size,
             save_json=True,
