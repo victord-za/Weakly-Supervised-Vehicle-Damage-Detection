@@ -36,7 +36,7 @@ def validate_setup():
         dir_path.mkdir(parents=True, exist_ok=True)
     
     print("Setup validation completed")
-    return HOME_FOLDER
+    return HOME_FOLDER, DATA_FOLDER
 
 
 def setup_logging_and_wandb(HOME_FOLDER):
